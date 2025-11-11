@@ -1,73 +1,49 @@
-import express from 'express';
-import Chat from '../models/Chat.js';
-import Course from '../models/Course.js';
-import { authenticate } from '../middleware/auth.js';
-
+const express = require("express");
 const router = express.Router();
+const { readJSON, writeJSON } = require("../db/jsonStore.js");
+const { v4: uuid } = require("uuid");
 
-// Get or create chat for a course
-router.get('/course/:courseId', authenticate, async (req, res) => {
-  try {
-    let chat = await Chat.findOne({ courseId: req.params.courseId });
+// ✅ Get chat for course
+router.get("/course/:id", async (req, res) => {
+  const chats = await readJSON("chats.json");
+  const guestId = req.headers["x-guest-id"] || "guest";
 
-    if (!chat) {
-      // Create new chat
-      chat = new Chat({
-        courseId: req.params.courseId,
-        participants: [req.user._id],
-        messages: [],
-      });
-      await chat.save();
-    } else {
-      // Add user to participants if not already
-      if (!chat.participants.includes(req.user._id)) {
-        chat.participants.push(req.user._id);
-        await chat.save();
-      }
-    }
+  let chat = chats.find((c) => c.courseId === req.params.id);
 
-    await chat.populate('participants', 'name profilePicture');
-    await chat.populate('messages.userId', 'name profilePicture');
-
-    res.json(chat);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
+  if (!chat) {
+    chat = {
+      id: uuid(),
+      courseId: req.params.id,
+      participants: [{ guestId }],
+      messages: []
+    };
+    chats.push(chat);
+    await writeJSON("chats.json", chats);
   }
+
+  res.json(chat);
 });
 
-// Send message
-router.post('/course/:courseId/message', authenticate, async (req, res) => {
-  try {
-    const { message, fileUrl, fileName, timestamp } = req.body;
+// ✅ Send message
+router.post("/course/:id/message", async (req, res) => {
+  const chats = await readJSON("chats.json");
+  const guestId = req.headers["x-guest-id"] || "guest";
 
-    let chat = await Chat.findOne({ courseId: req.params.courseId });
+  let chat = chats.find((c) => c.courseId === req.params.id);
 
-    if (!chat) {
-      chat = new Chat({
-        courseId: req.params.courseId,
-        participants: [req.user._id],
-        messages: [],
-      });
-    }
+  if (!chat) return res.status(404).json({ message: "Chat not found" });
 
-    chat.messages.push({
-      userId: req.user._id,
-      userName: req.user.name,
-      message,
-      fileUrl,
-      fileName,
-      timestamp,
-    });
+  const newMsg = {
+    id: uuid(),
+    guestId,
+    message: req.body.message,
+    timestamp: Date.now()
+  };
 
-    await chat.save();
+  chat.messages.push(newMsg);
+  await writeJSON("chats.json", chats);
 
-    await chat.populate('messages.userId', 'name profilePicture');
-
-    res.json(chat.messages[chat.messages.length - 1]);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
+  res.json(newMsg);
 });
 
-export default router;
-
+module.exports = router;
